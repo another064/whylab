@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+
+# 本地 npm 缓存（沙箱环境下缓存目录指向工作区内）
+.npm-cache/
+
+# 构建产物
+dist/
+*.local
+
+# 环境变量（密钥绝不入库）
+.env
+.env.*
+!.env.example
+
+# 数据库文件（SQLite 落地后生效）
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+prisma/*.db
+
+# 测试与日志
+coverage/
+*.log
+npm-debug.log*
+
+# 编辑器与系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
