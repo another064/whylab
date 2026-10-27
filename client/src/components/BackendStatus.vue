@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 
 import { useHealthStore } from '@/stores/health'
 
 const health = useHealthStore()
+
+const uptimeLabel = computed(() =>
+  health.detail ? `${health.detail.uptimeSeconds}s` : '—',
+)
 
 function formatTime(value: Date | null): string {
   if (!value) return '—'
@@ -16,9 +20,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="card status-card" aria-labelledby="status-title">
-    <header class="card-head">
-      <h2 id="status-title">后端连接状态</h2>
+  <aside class="panel status-panel" aria-labelledby="status-title">
+    <header class="panel-head">
+      <h2 id="status-title">后端连接</h2>
       <span class="status-pill" :data-status="health.status">
         <span class="dot" aria-hidden="true" />
         {{ health.statusLabel }}
@@ -27,27 +31,27 @@ onMounted(() => {
 
     <p class="status-message">{{ health.message }}</p>
 
-    <dl class="status-meta">
+    <dl class="spec">
       <div>
         <dt>接口</dt>
-        <dd><code>GET /api/health</code></dd>
+        <dd>GET /api/health</dd>
       </div>
       <div>
         <dt>最近检测</dt>
         <dd>{{ formatTime(health.checkedAt) }}</dd>
       </div>
       <div>
-        <dt>服务状态</dt>
-        <dd>{{ health.detail?.status ?? '—' }}</dd>
+        <dt>进程运行</dt>
+        <dd>{{ uptimeLabel }}</dd>
       </div>
       <div>
-        <dt>运行时长</dt>
-        <dd>{{ health.detail ? `${health.detail.uptimeSeconds}s` : '—' }}</dd>
+        <dt>模型</dt>
+        <dd>{{ health.detail?.status === 'ok' ? 'mock' : '—' }}</dd>
       </div>
     </dl>
 
     <button class="btn btn-ghost" type="button" :disabled="health.isChecking" @click="health.check()">
-      {{ health.isChecking ? '检测中…' : '重新检测' }}
+      {{ health.isChecking ? '检测中' : '重新检测' }}
     </button>
-  </section>
+  </aside>
 </template>

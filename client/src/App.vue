@@ -12,6 +12,7 @@ import { RouterLink, RouterView } from 'vue-router'
           <small>追问原理 · 沉淀知识 · 主动复习</small>
         </span>
       </RouterLink>
+      <span class="header-meta">MVP / 骨架阶段</span>
     </header>
 
     <main class="app-main">
@@ -19,7 +20,8 @@ import { RouterLink, RouterView } from 'vue-router'
     </main>
 
     <footer class="app-footer">
-      <span>WhyLab MVP · 当前为工程骨架阶段，尚未接入真实数据库与模型</span>
+      <span>WhyLab · 尚未接入数据库与真实模型</span>
+      <span class="num">Vue 3 · Express 5 · SQLite 计划中</span>
     </footer>
   </div>
 </template>
