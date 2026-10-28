@@ -2,8 +2,9 @@ import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 
 import { createApp } from './app.js'
+import { createTestDatabase } from './test/helpers.js'
 
-const app = createApp()
+const app = createApp(createTestDatabase())
 
 describe('GET /api/health', () => {
   it('返回约定的成功结构', async () => {

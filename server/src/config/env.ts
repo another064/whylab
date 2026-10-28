@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { config } from 'dotenv'
 
 // 统一从仓库根目录读取 .env，避免 client/ 与 server/ 各放一份配置造成不同步。
-const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-config({ path: resolve(serverRoot, '.env') })
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+config({ path: resolve(repoRoot, '.env') })
 
 function readPort(value: string | undefined, fallback: number): number {
   if (!value) return fallback
@@ -16,6 +16,8 @@ function readPort(value: string | undefined, fallback: number): number {
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: readPort(process.env.PORT, 3001),
+  /** SQLite 文件路径；相对路径按仓库根目录解析。 */
+  dbPath: resolve(repoRoot, process.env.DB_PATH ?? 'data/whylab.db'),
   /** 第一阶段固定为 mock：不调用任何外部模型。 */
   aiProvider: process.env.AI_PROVIDER ?? 'mock',
   aiBaseUrl: process.env.AI_BASE_URL ?? 'https://api.openai.com/v1',

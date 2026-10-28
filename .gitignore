@@ -13,9 +13,12 @@ dist/
 .env.*
 !.env.example
 
-# 数据库文件（SQLite 落地后生效）
+# 数据库文件
+data/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 prisma/*.db

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import type { Request, Response } from 'express'
 
 import { isAiConfigured } from '../config/env.js'
+import { buildMockAnswer, MOCK_FOLLOW_UPS } from '../services/mock-reply.js'
 
 export const chatRouter = Router()
 
@@ -48,23 +49,8 @@ chatRouter.post('/chat', (req: Request, res: Response) => {
       answer: buildMockAnswer(question),
       // 明确告知前端这是占位内容，界面必须据此展示「模拟响应」标记。
       isMock: !isAiConfigured(),
-      followUpSuggestions: [
-        '这个结论依赖哪些前提？如果去掉其中一个，会发生什么？',
-        '有没有反例或边界情况，让这个解释不再成立？',
-        '能否用一个具体例子把推导过程走一遍？',
-      ],
+      followUpSuggestions: MOCK_FOLLOW_UPS,
     },
   })
 })
 
-function buildMockAnswer(question: string): string {
-  return [
-    `你问的是：「${question}」`,
-    '',
-    '这是 WhyLab 后端占位接口返回的文本，尚未调用任何大模型，因此不包含真实的知识解释。',
-    '',
-    '它存在的目的只有一个：验证「前端输入 → Vite 代理 → Express 路由 → 结构化响应 → 页面渲染」这条链路是通的。',
-    '',
-    '接入真实模型后，这里会替换为：核心解释、推导过程、适用条件与不确定性提示。',
-  ].join('\n')
-}
