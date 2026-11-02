@@ -33,7 +33,7 @@ onMounted(() => {
         observer?.disconnect()
       }
     },
-    { threshold: 0.05 },
+    { threshold: 0 },
   )
   observer.observe(el.value)
 })

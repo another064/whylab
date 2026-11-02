@@ -2,11 +2,9 @@
 /** 解释模式（你问 AI）: thread, restate-in-your-words, next questions, composer. */
 import { computed, nextTick, ref, watch } from 'vue'
 
-import { PROMPTED_FOLLOW_UP } from '@/api/inquiry'
 import AppIcon from '@/components/AppIcon.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import StateBlock from '@/components/StateBlock.vue'
-import FadeContent from '@/components/motion/FadeContent.vue'
 import { useInquiryStore } from '@/stores/inquiry'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -67,58 +65,41 @@ watch(
     <template v-for="m in messages" :key="m.id">
       <MessageBubble v-if="m.role === 'user'" speaker="you">{{ m.content }}</MessageBubble>
 
-      <FadeContent v-else>
+      <div v-else class="enter-fade">
         <MessageBubble speaker="ai">
           <div class="answer">
-            <div v-if="m.meta?.isMock" class="mock-box">
-              <span class="mock-label">模拟响应</span>
-              尚未接入真实模型。以下内容由后端占位接口生成，只用于确认链路，不构成知识解释。
-            </div>
+            <p v-if="m.meta?.isMock" class="note">模拟响应，不构成知识解释。</p>
 
             <template v-if="m.meta?.explanation">
-              <div class="conclusion">
-                <span class="conclusion-label">一句话结论</span>
-                <p>{{ m.meta.explanation.conclusion }}</p>
-              </div>
-              <div class="why">
-                <span class="why-title">为什么会这样</span>
-                <ol class="why-list">
-                  <li v-for="(reason, i) in m.meta.explanation.reasons" :key="i">
-                    <span class="why-index num" aria-hidden="true">{{ i + 1 }}</span>
-                    <span>{{ reason }}</span>
-                  </li>
-                </ol>
-              </div>
-              <div
-                v-if="m.meta.explanation.premises.length || m.meta.explanation.uncertainties.length"
-                class="caveats"
-              >
-                <span v-for="(c, i) in m.meta.explanation.premises" :key="`p${i}`" class="chip-outline">
-                  前提：{{ c }}
-                </span>
-                <span v-for="(c, i) in m.meta.explanation.uncertainties" :key="`u${i}`" class="chip-outline">
-                  不确定：{{ c }}
-                </span>
-              </div>
+              <p class="lead">{{ m.meta.explanation.conclusion }}</p>
+              <ol class="steps">
+                <li v-for="(reason, i) in m.meta.explanation.reasons" :key="i">{{ reason }}</li>
+              </ol>
+              <p v-if="m.meta.explanation.premises.length" class="note">
+                前提：{{ m.meta.explanation.premises.join(' ') }}
+              </p>
+              <p v-if="m.meta.explanation.uncertainties.length" class="note">
+                不确定：{{ m.meta.explanation.uncertainties.join(' ') }}
+              </p>
             </template>
             <template v-else>
               <p v-for="(p, i) in paragraphs(m.content)" :key="i" class="answer-p">{{ p }}</p>
             </template>
 
             <div v-if="m.id === latest?.id" class="answer-actions">
-              <button class="btn btn-outline" type="button" :disabled="saved" @click="saved = true">
-                <AppIcon name="bookmark" :size="16" />{{ saved ? '已收进（示例）' : '收进知识库' }}
+              <button class="text-action" type="button" :disabled="saved" @click="saved = true">
+                {{ saved ? '已收进（示例）' : '收进知识库' }}
               </button>
-              <button class="btn btn-outline" type="button" :disabled="workspace.sending" @click="send('能换个讲法吗？')">
+              <button class="text-action" type="button" :disabled="workspace.sending" @click="send('能换个讲法吗？')">
                 换个讲法
               </button>
-              <button class="btn btn-outline" type="button" :disabled="workspace.sending" @click="send('能举个具体例子吗？')">
+              <button class="text-action" type="button" :disabled="workspace.sending" @click="send('能举个具体例子吗？')">
                 举个例子
               </button>
             </div>
           </div>
         </MessageBubble>
-      </FadeContent>
+      </div>
     </template>
 
     <MessageBubble v-if="workspace.pendingContent" speaker="you">{{ workspace.pendingContent }}</MessageBubble>
@@ -133,40 +114,32 @@ watch(
     </div>
 
     <template v-if="latest && !workspace.pendingContent">
-      <FadeContent as="section" class="restate card card-you" aria-labelledby="restate-label">
+      <section class="restate" aria-labelledby="restate-label">
         <template v-if="inquiry.restatement">
-          <span class="restate-done-label">你的理解 · 已存</span>
+          <span class="restate-label">你的理解</span>
           <p class="restate-done">{{ inquiry.restatement }}</p>
         </template>
         <form v-else class="restate-form" @submit.prevent="restate">
-          <label id="restate-label" for="restate" class="restate-label">
-            先别往下问——用一句你自己的话说说，刚才这个为什么成立？
-          </label>
+          <label id="restate-label" for="restate" class="restate-label">用一句你自己的话说说</label>
           <textarea
             id="restate"
             v-model="restateDraft"
             class="textarea textarea-you"
             rows="2"
-            placeholder="说错了也没关系，WhyLab 会帮你找到差在哪"
+            placeholder="说错了也没关系"
           />
-          <div class="restate-foot">
-            <span class="restate-hint">自己讲出来的，比读到的记得更久。</span>
-            <button class="btn btn-primary" type="submit" :disabled="!restateDraft.trim() || inquiry.restating">
-              {{ inquiry.restating ? '正在存…' : '存为我的理解' }}
-            </button>
-          </div>
+          <button class="btn btn-primary" type="submit" :disabled="!restateDraft.trim() || inquiry.restating">
+            {{ inquiry.restating ? '正在存…' : '存为我的理解' }}
+          </button>
           <p v-if="inquiry.restateError" class="error-text" role="alert">{{ inquiry.restateError }}</p>
         </form>
-      </FadeContent>
+      </section>
 
       <section v-if="followUps.length" class="next" aria-labelledby="next-title">
         <h2 id="next-title" class="next-title">接着可以问</h2>
-        <div class="next-chips">
-          <button class="chip chip-nudge" type="button" @click="send(PROMPTED_FOLLOW_UP)">
-            <span class="tag tag-you">你很少问</span>{{ PROMPTED_FOLLOW_UP }}
-          </button>
-          <button v-for="q in followUps" :key="q" class="chip" type="button" @click="send(q)">{{ q }}</button>
-        </div>
+        <button v-for="q in followUps" :key="q" class="text-action next-q" type="button" @click="send(q)">
+          {{ q }}
+        </button>
       </section>
     </template>
 
@@ -196,7 +169,7 @@ watch(
 .explain {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-6);
 }
 
 .answer {
@@ -205,20 +178,21 @@ watch(
   gap: var(--space-3);
 }
 
-.mock-box {
-  background: var(--ai-soft);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--fs-sm);
-  line-height: 1.7;
-  color: var(--ai-text);
+.lead {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 700;
 }
 
-.mock-label {
-  display: block;
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  margin-bottom: 2px;
+.steps {
+  padding-left: 1.4em;
+  list-style: decimal;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  color: var(--text-body);
 }
 
 .answer-p {
@@ -228,74 +202,40 @@ watch(
   white-space: pre-wrap;
 }
 
-.conclusion {
-  background: var(--ai-soft);
-  border-radius: var(--radius-md);
-  padding: 14px var(--space-4);
-}
-
-.conclusion-label {
-  display: block;
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  color: var(--ai-text);
-  margin-bottom: var(--space-1);
-}
-
-.conclusion p {
-  font-size: var(--fs-body);
+.note {
+  font-size: var(--fs-xs);
   line-height: 1.7;
-  font-weight: 500;
+  color: var(--text-muted);
 }
 
-.why {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: var(--fs-md);
-  line-height: var(--lh-body);
-  color: var(--text-body);
-}
-
-.why-title {
+.text-action {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
   font-size: var(--fs-sm);
-  font-weight: 700;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.text-action:hover:not(:disabled) {
   color: var(--text);
+  text-decoration: underline;
 }
 
-.why-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.why-list li {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.why-index {
-  flex: 0 0 24px;
-  height: 24px;
-  margin-top: 2px;
-  border-radius: 50%;
-  border: 1.5px solid var(--ai);
-  color: var(--ai-text);
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.caveats {
+.answer-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-4);
+}
+
+.send-failed,
+.restate,
+.next {
+  margin-left: 44px;
 }
 
 .send-failed {
-  margin-left: 44px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -309,56 +249,21 @@ watch(
   font-size: var(--fs-sm);
 }
 
-.answer-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.answer-actions .btn {
-  min-height: 40px;
-  padding: 0 14px;
-}
-
-.restate,
-.next {
-  margin-left: 44px;
-}
-
-.restate {
-  padding: var(--space-4);
-  border-radius: 16px;
-}
-
 .restate-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2);
+}
+
+.restate-form .btn {
+  align-self: flex-start;
+  min-height: 40px;
 }
 
 .restate-label {
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   font-weight: 700;
   color: var(--you-text-strong);
-}
-
-.restate-foot {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.restate-hint {
-  font-size: var(--fs-xs);
-  color: var(--you-text-strong);
-}
-
-.restate-done-label {
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  color: var(--you-text);
 }
 
 .restate-done {
@@ -370,7 +275,8 @@ watch(
 .next {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: flex-start;
+  gap: var(--space-1);
 }
 
 .next-title {
@@ -378,35 +284,9 @@ watch(
   font-weight: 700;
 }
 
-.next-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.chip {
-  min-height: 40px;
-  padding: 6px 14px;
-  border-radius: 20px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface);
-  font-size: var(--fs-sm);
-  text-align: left;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.chip:hover {
-  border-color: var(--ink);
-}
-
-.chip-nudge {
-  border: 1.5px solid var(--you-text);
-}
-
-.chip-nudge .tag {
-  font-size: var(--fs-3xs);
+.next-q {
+  min-height: var(--tap);
+  color: var(--ai-text);
 }
 
 .composer {

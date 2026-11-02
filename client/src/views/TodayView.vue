@@ -7,11 +7,11 @@ import { setPatternStatus } from '@/api/profile'
 import { PERFORMANCE_SHORT } from '@/api/review'
 import { formatToday, greetingFor } from '@/api/today'
 import type { ConversationMode } from '@/api/workspace'
-import AppIcon from '@/components/AppIcon.vue'
 import DepthBar from '@/components/DepthBar.vue'
 import ModeSwitch from '@/components/ModeSwitch.vue'
 import NodeCard from '@/components/NodeCard.vue'
 import PatternCard from '@/components/PatternCard.vue'
+import SelectMenu from '@/components/SelectMenu.vue'
 import StateBlock from '@/components/StateBlock.vue'
 import CountUp from '@/components/motion/CountUp.vue'
 import DotGrid from '@/components/motion/DotGrid.vue'
@@ -43,6 +43,10 @@ const summary = computed(() => today.summary)
 const remaining = computed(() =>
   summary.value ? summary.value.reviewDue - summary.value.reviewDone : 0,
 )
+const spaceOptions = computed(() => [
+  ...workspace.spaces.map((s) => ({ value: s.id, label: s.title })),
+  { value: NEW_SPACE, label: '+ 新建学习空间', divided: true },
+])
 const needsNewSpace = computed(
   () => spaceChoice.value === NEW_SPACE || (workspace.spacesStatus === 'ready' && !workspace.spaces.length),
 )
@@ -153,15 +157,14 @@ onMounted(async () => {
           <ModeSwitch v-model="mode" variant="cards" class="ask-modes" :disabled="starting" />
 
           <div class="ask-actions">
-            <label v-if="workspace.spaces.length" class="space-picker">
-              <span class="sr-only">放进哪个学习空间</span>
-              <span aria-hidden="true">放进：</span>
-              <select v-model="spaceChoice" :disabled="starting">
-                <option v-for="s in workspace.spaces" :key="s.id" :value="s.id">{{ s.title }}</option>
-                <option :value="NEW_SPACE">+ 新建学习空间</option>
-              </select>
-              <AppIcon name="chevron-down" :size="16" />
-            </label>
+            <SelectMenu
+              v-if="workspace.spaces.length"
+              v-model="spaceChoice"
+              :options="spaceOptions"
+              label="放进哪个学习空间"
+              prefix="放进："
+              :disabled="starting"
+            />
             <button class="btn btn-primary btn-lg" type="submit" :disabled="!canStart">
               {{ starting ? '正在开始…' : '开始探究' }}
             </button>
@@ -350,40 +353,6 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
-}
-
-.space-picker {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: var(--tap);
-  padding: 0 var(--space-3) 0 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-}
-
-.space-picker:focus-within {
-  box-shadow: var(--focus-ring);
-}
-
-.space-picker select {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0 20px 0 0;
-  margin-right: -20px;
-  max-width: 180px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.space-picker select:focus {
-  outline: none;
 }
 
 .new-space {

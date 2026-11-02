@@ -268,15 +268,6 @@ ol {
   background: var(--surface-sunken);
 }
 
-.chip-outline {
-  font-size: var(--fs-xs);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: var(--space-1) 10px;
-  color: var(--text-secondary);
-}
-
 /* sample-data marker for sections still backed by mocks */
 .mock-flag {
   font-size: var(--fs-3xs);
