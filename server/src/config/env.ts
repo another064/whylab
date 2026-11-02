@@ -13,16 +13,22 @@ function readPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback
 }
 
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: readPort(process.env.PORT, 3001),
   /** SQLite 文件路径；相对路径按仓库根目录解析。 */
   dbPath: resolve(repoRoot, process.env.DB_PATH ?? 'data/whylab.db'),
-  /** 第一阶段固定为 mock：不调用任何外部模型。 */
+  /** mock = 不调用任何外部模型；openai-compatible = 兼容 OpenAI Chat Completions 的服务。 */
   aiProvider: process.env.AI_PROVIDER ?? 'mock',
   aiBaseUrl: process.env.AI_BASE_URL ?? 'https://api.openai.com/v1',
   aiApiKey: process.env.AI_API_KEY ?? '',
   aiModel: process.env.AI_MODEL ?? '',
+  aiTimeoutMs: readPositiveInt(process.env.AI_TIMEOUT_MS, 60_000),
 } as const
 
 /** 只有同时配置了 key 和 model 才认为外部模型可用；密钥始终只存在于服务端。 */

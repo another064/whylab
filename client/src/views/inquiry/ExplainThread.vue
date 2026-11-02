@@ -26,11 +26,12 @@ function paragraphs(text: string): string[] {
   return text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
 }
 
-async function send(text = draft.value) {
-  if (await workspace.send(text)) {
-    if (text === draft.value) draft.value = ''
-    saved.value = false
-  }
+function send(text = draft.value) {
+  if (!text.trim() || workspace.sending) return
+  // the text moves into the thread straight away; a failure keeps it there with a retry
+  if (text === draft.value) draft.value = ''
+  saved.value = false
+  void workspace.send(text)
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -46,7 +47,7 @@ async function restate() {
 }
 
 watch(
-  () => messages.value.length,
+  () => [messages.value.length, workspace.pendingContent],
   async () => {
     await nextTick()
     bottom.value?.scrollIntoView({ block: 'end' })
@@ -57,7 +58,7 @@ watch(
 <template>
   <div class="explain">
     <StateBlock
-      v-if="!messages.length && !workspace.sending"
+      v-if="!messages.length && !workspace.pendingContent"
       state="empty"
       title="问出你卡住的那个“为什么”"
       message="写清“为什么”，比写“是什么”更容易得到能讲给别人听的答案。"
@@ -73,7 +74,36 @@ watch(
               <span class="mock-label">模拟响应</span>
               尚未接入真实模型。以下内容由后端占位接口生成，只用于确认链路，不构成知识解释。
             </div>
-            <p v-for="(p, i) in paragraphs(m.content)" :key="i" class="answer-p">{{ p }}</p>
+
+            <template v-if="m.meta?.explanation">
+              <div class="conclusion">
+                <span class="conclusion-label">一句话结论</span>
+                <p>{{ m.meta.explanation.conclusion }}</p>
+              </div>
+              <div class="why">
+                <span class="why-title">为什么会这样</span>
+                <ol class="why-list">
+                  <li v-for="(reason, i) in m.meta.explanation.reasons" :key="i">
+                    <span class="why-index num" aria-hidden="true">{{ i + 1 }}</span>
+                    <span>{{ reason }}</span>
+                  </li>
+                </ol>
+              </div>
+              <div
+                v-if="m.meta.explanation.premises.length || m.meta.explanation.uncertainties.length"
+                class="caveats"
+              >
+                <span v-for="(c, i) in m.meta.explanation.premises" :key="`p${i}`" class="chip-outline">
+                  前提：{{ c }}
+                </span>
+                <span v-for="(c, i) in m.meta.explanation.uncertainties" :key="`u${i}`" class="chip-outline">
+                  不确定：{{ c }}
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <p v-for="(p, i) in paragraphs(m.content)" :key="i" class="answer-p">{{ p }}</p>
+            </template>
 
             <div v-if="m.id === latest?.id" class="answer-actions">
               <button class="btn btn-outline" type="button" :disabled="saved" @click="saved = true">
@@ -91,11 +121,18 @@ watch(
       </FadeContent>
     </template>
 
-    <MessageBubble v-if="workspace.sending" speaker="ai">
+    <MessageBubble v-if="workspace.pendingContent" speaker="you">{{ workspace.pendingContent }}</MessageBubble>
+
+    <MessageBubble v-if="workspace.sending && workspace.pendingContent" speaker="ai">
       <StateBlock state="loading" :lines="3" title="WhyLab 正在想" />
     </MessageBubble>
 
-    <template v-if="latest && !workspace.sending">
+    <div v-else-if="workspace.sendError && workspace.pendingContent" class="send-failed" role="alert">
+      <span>{{ workspace.sendError }}你的问题还在。</span>
+      <button class="btn btn-outline" type="button" @click="workspace.retry()">重试</button>
+    </div>
+
+    <template v-if="latest && !workspace.pendingContent">
       <FadeContent as="section" class="restate card card-you" aria-labelledby="restate-label">
         <template v-if="inquiry.restatement">
           <span class="restate-done-label">你的理解 · 已存</span>
@@ -133,7 +170,9 @@ watch(
       </section>
     </template>
 
-    <p v-if="workspace.sendError" class="error-text" role="alert">{{ workspace.sendError }}</p>
+    <p v-if="workspace.sendError && !workspace.pendingContent" class="error-text" role="alert">
+      {{ workspace.sendError }}
+    </p>
 
     <form ref="bottom" class="composer" @submit.prevent="send()">
       <label for="next-input" class="sr-only">继续追问</label>
@@ -187,6 +226,87 @@ watch(
   line-height: var(--lh-body);
   color: var(--text-body);
   white-space: pre-wrap;
+}
+
+.conclusion {
+  background: var(--ai-soft);
+  border-radius: var(--radius-md);
+  padding: 14px var(--space-4);
+}
+
+.conclusion-label {
+  display: block;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  color: var(--ai-text);
+  margin-bottom: var(--space-1);
+}
+
+.conclusion p {
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  font-weight: 500;
+}
+
+.why {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  color: var(--text-body);
+}
+
+.why-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.why-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.why-list li {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.why-index {
+  flex: 0 0 24px;
+  height: 24px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ai);
+  color: var(--ai-text);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.caveats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.send-failed {
+  margin-left: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-sm);
 }
 
 .answer-actions {
@@ -329,6 +449,7 @@ watch(
 }
 
 @media (max-width: 767px) {
+  .send-failed,
   .restate,
   .next {
     margin-left: 0;

@@ -43,6 +43,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   const sending = ref(false)
   const sendError = ref('')
+  /** What's on its way to the model; kept after a failure so it can be retried. */
+  const pending = ref<{ conversationId: string; content: string } | null>(null)
+  let openRequest = 0
+
+  const pendingContent = computed(() =>
+    pending.value && pending.value.conversationId === conversation.value?.id
+      ? pending.value.content
+      : null,
+  )
 
   const currentSpace = computed(
     () => spaces.value.find((s) => s.id === conversation.value?.spaceId) ?? null,
@@ -74,27 +83,30 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return list
   }
 
-  /** Open a conversation by id (route param). Ignores stale responses. */
+  /** Open a conversation by id (route param). A newer open wins over a slower older one. */
   async function openConversation(id: string): Promise<void> {
     if (conversation.value?.id === id && conversationStatus.value === 'ready') return
+    const request = ++openRequest
     conversationStatus.value = 'loading'
     conversationError.value = ''
     sendError.value = ''
     messages.value = []
     try {
       const [conv, list] = await Promise.all([getConversation(id), listMessages(id)])
+      if (request !== openRequest) return
       conversation.value = conv
       messages.value = list
       conversationStatus.value = 'ready'
       if (!conversationsBySpace.value[conv.spaceId]) void loadConversations(conv.spaceId)
     } catch (error) {
+      if (request !== openRequest) return
       conversation.value = null
       conversationStatus.value = 'failed'
       conversationError.value = errorMessage(error, '加载对话失败。')
     }
   }
 
-  /** Today's "开始探究": create the conversation, send the first message, return where to go. */
+  /** Today's "开始探究": create the conversation and start sending; the caller navigates right away. */
   async function startInquiry(input: {
     spaceId: string
     question: string
@@ -104,13 +116,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       title: input.question.slice(0, CONVERSATION_TITLE_LENGTH),
       mode: input.mode,
     })
+    openRequest += 1
     conversation.value = created
     messages.value = []
     conversationStatus.value = 'ready'
     const cached = conversationsBySpace.value[input.spaceId]
     if (cached) conversationsBySpace.value[input.spaceId] = [created, ...cached]
     else void loadConversations(input.spaceId) // includes `created`
-    await send(input.question)
+    void send(input.question)
     return created
   }
 
@@ -121,11 +134,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
     sending.value = true
     sendError.value = ''
+    pending.value = { conversationId: conv.id, content: trimmed }
     try {
       const result = await sendMessageApi(conv.id, trimmed)
       if (conversation.value?.id === conv.id) {
-        messages.value = [...messages.value, result.userMessage, result.reply]
+        // reopening mid-flight may already have loaded this pair
+        const known = new Set(messages.value.map((m) => m.id))
+        messages.value = [
+          ...messages.value,
+          ...[result.userMessage, result.reply].filter((m) => !known.has(m.id)),
+        ]
       }
+      pending.value = null
       bumpToTop(conv, result.reply.createdAt)
       return true
     } catch (error) {
@@ -134,6 +154,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } finally {
       sending.value = false
     }
+  }
+
+  /** Send the failed message again. */
+  function retry(): Promise<boolean> {
+    return send(pending.value?.content ?? '')
   }
 
   async function setMode(mode: ConversationMode): Promise<void> {
@@ -173,6 +198,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     conversationError,
     sending,
     sendError,
+    pendingContent,
     currentSpace,
     loadSpaces,
     createSpace,
@@ -180,6 +206,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openConversation,
     startInquiry,
     send,
+    retry,
     setMode,
   }
 })

@@ -1,7 +1,7 @@
 # WhyLab API 设计与数据模型（MVP）
 
 - 版本：V0.3（采用界面设计稿，补充其所需接口与字段）
-- 状态：健康检查、提问、学习空间、对话与消息已实现（标 ✅）；其余为设计草案。前端对未实现接口的调用集中在 `client/src/api/*.ts`，当前返回模拟数据
+- 状态：健康检查、提问、学习空间、对话与消息（解释模式接真实模型）已实现（标 ✅）；其余为设计草案。前端对未实现接口的调用集中在 `client/src/api/*.ts`，当前返回模拟数据
 - 约定：所有接口以 `/api` 为前缀，请求与响应均为 `application/json; charset=utf-8`
 
 > 设计意图：**先把对话、知识节点、复习任务与复习历史的关系定下来，再写页面。**
@@ -111,12 +111,21 @@
 | `PATCH` | `/api/conversations/:id` | ✅ 改标题或切换模式 `{ title?, mode?: 'explain' \| 'socratic' }` |
 | `DELETE` | `/api/conversations/:id` | ✅ 删除对话及其消息、追问轮次 |
 | `GET` | `/api/conversations/:id/messages` | ✅ 消息列表（`?limit=`，默认且最多 200 条，按发送顺序），每条带 `mode`、`kind`、`meta` |
-| `POST` | `/api/conversations/:id/messages` | ✅ 发送一条消息，按对话当前 `mode` 生成回复（当前两种模式都是 mock 回复） |
+| `POST` | `/api/conversations/:id/messages` | ✅ 发送一条消息，按对话当前 `mode` 生成回复（解释模式走真实模型，未配置时 mock；追问模式暂为 mock） |
 | `POST` | `/api/conversations/:id/restatements` | 解释后"用一句话复述" `{ content }`：写一条 `kind = restatement` 的消息，同时建 `understanding` 节点（`source_message_id` 指向这条消息），并作为档案证据 |
 | `POST` | `/api/conversations/:id/hints` | 追问模式的三级提示 `{ level: 1 \| 2 \| 3 }`，分别对应 `nudge` / `hint` / `reveal`；只能按顺序解锁，记录"在哪一步需要帮助"，不影响评分 |
 | `GET` | `/api/conversations/:id/dependencies` | 这个问题依赖的概念：`[{ title, nodeId?, state: 'mastered' \| 'learned' \| 'missing' }]`，`mastered` 来自档案里已确认的 `mastered` 条目 |
 | `POST` | `/api/conversations/:id/reveal` | 追问模式下"直接告诉我"：当前步强制 `reveal`（等价于 `hints` 的 `level: 3`，二选一实现） |
 | `POST` | `/api/conversations/:id/end` | 结束会话：结束进行中的追问轮次并触发档案提取（异步） |
+
+**解释模式**的实现约定：
+
+- 先调用模型，成功后才在同一事务里写入问答。失败时不写任何消息，用户重试不会产生重复问题。
+- 回复的 `content` 存纯文本（用作后续上下文），结构化正文在 `meta.explanation: { conclusion, reasons[], premises[], uncertainties[] }`。
+- 上下文取最近 10 条消息，并去掉 `isMock` 的占位回复。
+- `observations` 只保留枚举合法、不含能力评价词、`excerpt` 真实出现在提问里的条目，其余丢弃，不触发重试。
+- 输出不合格时最多修复重试 2 次，仍失败返回 `AI_INVALID_OUTPUT`；服务不可用或超时（`AI_TIMEOUT_MS`，默认 60 秒）返回 `AI_UNAVAILABLE`，不自动重试。
+- `/api/chat` 是早期占位接口，始终 `isMock: true`，前端已不再使用。
 
 **解释模式**下 `POST .../messages` 的响应：
 
@@ -522,7 +531,7 @@ function selectForPrompt(patterns: Pattern[], topic: string, limit = 5): Pattern
 ## 7. 下一步实现顺序
 
 1. ✅ **SQLite 接入**（迁移 001、002 已落地）：`server/src/db/` 下建连接与迁移脚本（`better-sqlite3`），先落 `users / learning_spaces / conversations / messages / socratic_rounds`，字段按本版一次到位（`mode`、`kind`、`meta_json`），避免后续迁移。启动时自动创建单用户 `local` 记录。
-2. **真实对话 · 解释模式**：`POST /api/conversations/:id/messages` 接 OpenAI 兼容接口，保留 `isMock` 语义（无 key 时仍走 mock）；输出带 `observations`，先写入 `meta_json` 不使用。
+2. ✅ **真实对话 · 解释模式**：`POST /api/conversations/:id/messages` 接 OpenAI 兼容接口，保留 `isMock` 语义（无 key 时仍走 mock）；输出带 `observations`，先写入 `meta_json` 不使用。
 3. **追问模式**：同一接口按 `mode` 分派到 `services/socratic.ts`；轮次状态机（goal → probe… → summary）写单元测试；`reveal` 与 `end` 接口。
 4. **知识节点**：保存 → 列表 → 编辑 → 删除，含 `knowledge_edges` 与"追问小结保存为节点"。
 5. **复习**：调度纯函数 + 单元测试 → `review_items` / `review_attempts`（含结构化反馈字段）→ 回忆界面。

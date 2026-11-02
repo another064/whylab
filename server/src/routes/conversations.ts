@@ -1,28 +1,29 @@
 import { Router } from 'express'
 
-import { isAiConfigured } from '../config/env.js'
 import type { Repositories } from '../db/repositories/index.js'
 import { isConversationMode, type ConversationMode } from '../db/repositories/conversations.js'
-import type { MessageKind } from '../db/repositories/messages.js'
+import type { MessageKind, MessageMeta } from '../db/repositories/messages.js'
 import { LOCAL_USER_ID } from '../db/migrate.js'
 import { HttpError, notFound, validationError } from '../http/errors.js'
 import { readBody, readString } from '../http/validate.js'
 import { CONVERSATION_TITLE_MAX } from './spaces.js'
+import type { ChatModel } from '../services/ai/model.js'
+import { explanationToText, generateExplanation } from '../services/explain.js'
 import { buildMockAnswer, MOCK_FOLLOW_UPS } from '../services/mock-reply.js'
 
 export const MESSAGE_CONTENT_MAX = 2000
 const MESSAGE_LIST_MAX = 200
 
 /**
- * 当前阶段两种模式都回 mock：只区分写入的 kind，便于后续按 mode 分派到真实服务。
- * 追问模式的轮次（socratic_rounds）在第 3 步接入，这里暂不创建。
+ * 解释模式配置了模型就走真实服务；追问模式还是 mock，
+ * 轮次（socratic_rounds）和提示词在第 3 步接入，这里暂不创建。
  */
 const KINDS_BY_MODE: Record<'explain' | 'socratic', { user: MessageKind; reply: MessageKind }> = {
   explain: { user: 'question', reply: 'answer' },
   socratic: { user: 'goal', reply: 'probe' },
 }
 
-export function createConversationsRouter(repos: Repositories): Router {
+export function createConversationsRouter(repos: Repositories, model: ChatModel | null): Router {
   const router = Router()
 
   function requireConversation(id: string) {
@@ -65,7 +66,7 @@ export function createConversationsRouter(repos: Repositories): Router {
     res.json({ success: true, data: repos.messages.listByConversation(req.params.id, limit) })
   })
 
-  router.post('/conversations/:id/messages', (req, res) => {
+  router.post('/conversations/:id/messages', async (req, res) => {
     const conversation = requireConversation(req.params.id)
     const body = readBody(req.body)
     // 与 /api/chat 保持同样的错误码，前端提示逻辑可复用。
@@ -81,8 +82,32 @@ export function createConversationsRouter(repos: Repositories): Router {
       )
     }
 
-    const isMock = !isAiConfigured()
     const kinds = KINDS_BY_MODE[conversation.mode]
+
+    // 先拿到回复再落库：模型失败时什么都不写，用户重试不会留下重复的问题。
+    let replyContent: string
+    let replyMeta: MessageMeta
+    if (conversation.mode === 'explain' && model) {
+      const history = repos.messages.listByConversation(conversation.id, MESSAGE_LIST_MAX)
+      const explanation = await generateExplanation(model, history, content)
+      replyContent = explanationToText(explanation)
+      replyMeta = {
+        isMock: false,
+        followUpSuggestions: explanation.followUpSuggestions,
+        explanation: {
+          conclusion: explanation.conclusion,
+          reasons: explanation.reasons,
+          premises: explanation.premises,
+          uncertainties: explanation.uncertainties,
+        },
+        observations: explanation.observations,
+      }
+      // 等模型的这段时间里对话可能已被删除
+      requireConversation(conversation.id)
+    } else {
+      replyContent = buildMockAnswer(content)
+      replyMeta = { isMock: true, followUpSuggestions: MOCK_FOLLOW_UPS }
+    }
 
     const result = repos.db.transaction(() => {
       const now = new Date().toISOString()
@@ -99,8 +124,8 @@ export function createConversationsRouter(repos: Repositories): Router {
         role: 'assistant',
         mode: conversation.mode,
         kind: kinds.reply,
-        content: buildMockAnswer(content),
-        meta: { followUpSuggestions: MOCK_FOLLOW_UPS, isMock },
+        content: replyContent,
+        meta: replyMeta,
         createdAt: now,
       })
       repos.conversations.touch(conversation.id, now)
@@ -110,7 +135,11 @@ export function createConversationsRouter(repos: Repositories): Router {
 
     res.status(201).json({
       success: true,
-      data: { ...result, followUpSuggestions: MOCK_FOLLOW_UPS, isMock },
+      data: {
+        ...result,
+        followUpSuggestions: replyMeta.followUpSuggestions ?? [],
+        isMock: replyMeta.isMock ?? false,
+      },
     })
   })
 

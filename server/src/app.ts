@@ -8,12 +8,14 @@ import { chatRouter } from './routes/chat.js'
 import { createConversationsRouter } from './routes/conversations.js'
 import { healthRouter } from './routes/health.js'
 import { createSpacesRouter } from './routes/spaces.js'
+import { createModelFromEnv, type ChatModel } from './services/ai/model.js'
 
 /**
  * 只负责组装应用，不监听端口、不打开数据库。
  * 数据库连接由调用方注入：server.ts 传文件库，测试传内存库。
+ * 模型同理，默认按环境变量创建，未配置时为 null（走 mock）。
  */
-export function createApp(db: DB): Express {
+export function createApp(db: DB, model: ChatModel | null = createModelFromEnv()): Express {
   const app = express()
   const repos = createRepositories(db)
 
@@ -23,7 +25,7 @@ export function createApp(db: DB): Express {
   app.use('/api', healthRouter)
   app.use('/api', chatRouter)
   app.use('/api', createSpacesRouter(repos))
-  app.use('/api', createConversationsRouter(repos))
+  app.use('/api', createConversationsRouter(repos, model))
 
   app.use(notFoundHandler)
   app.use(errorHandler)

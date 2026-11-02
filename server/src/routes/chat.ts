@@ -1,7 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
 
-import { isAiConfigured } from '../config/env.js'
 import { buildMockAnswer, MOCK_FOLLOW_UPS } from '../services/mock-reply.js'
 
 export const chatRouter = Router()
@@ -47,8 +46,8 @@ chatRouter.post('/chat', (req: Request, res: Response) => {
     data: {
       question,
       answer: buildMockAnswer(question),
-      // 明确告知前端这是占位内容，界面必须据此展示「模拟响应」标记。
-      isMock: !isAiConfigured(),
+      // 这个早期接口始终返回占位内容，真实对话走 /api/conversations/:id/messages。
+      isMock: true,
       followUpSuggestions: MOCK_FOLLOW_UPS,
     },
   })

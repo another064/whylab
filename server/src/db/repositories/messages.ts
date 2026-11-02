@@ -20,6 +20,15 @@ export type MessageKind =
 export interface MessageMeta {
   followUpSuggestions?: string[]
   isMock?: boolean
+  /** 解释模式的结构化正文，前端据此渲染 */
+  explanation?: {
+    conclusion: string
+    reasons: string[]
+    premises: string[]
+    uncertainties: string[]
+  }
+  /** 给思维档案攒的原料，当前只存不用 */
+  observations?: { category: string; statement: string; excerpt: string }[]
 }
 
 export interface Message {

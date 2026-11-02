@@ -50,6 +50,7 @@ const canStart = computed(
   () =>
     question.value.trim().length > 0 &&
     !starting.value &&
+    !workspace.sending &&
     (!needsNewSpace.value || newSpaceTitle.value.trim().length > 0),
 )
 

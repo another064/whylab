@@ -26,7 +26,17 @@ export interface Message {
   mode: ConversationMode
   kind: string
   content: string
-  meta: { followUpSuggestions?: string[]; isMock?: boolean } | null
+  meta: {
+    followUpSuggestions?: string[]
+    isMock?: boolean
+    /** Structured answer from the model; absent on mock and older replies. */
+    explanation?: {
+      conclusion: string
+      reasons: string[]
+      premises: string[]
+      uncertainties: string[]
+    }
+  } | null
   createdAt: string
 }
 
