@@ -5,16 +5,19 @@ import { ApiError } from '@/api/http'
 import {
   createConversation,
   createSpace as createSpaceApi,
+  endRound as endRoundApi,
   getConversation,
   listConversations,
   listMessages,
   listSpaces,
+  revealStep,
   sendMessage as sendMessageApi,
   updateConversation,
   type Conversation,
   type ConversationMode,
   type LearningSpace,
   type Message,
+  type SendMessageResult,
 } from '@/api/workspace'
 
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'failed'
@@ -137,14 +140,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     pending.value = { conversationId: conv.id, content: trimmed }
     try {
       const result = await sendMessageApi(conv.id, trimmed)
-      if (conversation.value?.id === conv.id) {
-        // reopening mid-flight may already have loaded this pair
-        const known = new Set(messages.value.map((m) => m.id))
-        messages.value = [
-          ...messages.value,
-          ...[result.userMessage, result.reply].filter((m) => !known.has(m.id)),
-        ]
-      }
+      applyResult(conv.id, result)
       pending.value = null
       bumpToTop(conv, result.reply.createdAt)
       return true
@@ -156,6 +152,43 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  function applyResult(conversationId: string, result: SendMessageResult) {
+    if (conversation.value?.id !== conversationId) return
+    // reopening mid-flight may already have loaded these
+    const known = new Set(messages.value.map((m) => m.id))
+    const incoming = [
+      ...(result.userMessage ? [result.userMessage] : []),
+      ...(result.replies ?? [result.reply]),
+    ]
+    messages.value = [...messages.value, ...incoming.filter((m) => !known.has(m.id))]
+    if (result.round) conversation.value = { ...conversation.value, round: result.round }
+  }
+
+  /** Socratic actions that aren't a typed message: hints, reveal, ending the round. */
+  async function roundAction(run: (conversationId: string) => Promise<SendMessageResult>) {
+    const conv = conversation.value
+    if (!conv || sending.value) return
+    sending.value = true
+    sendError.value = ''
+    try {
+      const result = await run(conv.id)
+      applyResult(conv.id, result)
+      bumpToTop(conv, result.reply.createdAt)
+    } catch (error) {
+      sendError.value = errorMessage(error, '没有成功，请稍后重试。')
+    } finally {
+      sending.value = false
+    }
+  }
+
+  function helpRound(level: 1 | 2 | 3) {
+    return roundAction((id) => revealStep(id, level))
+  }
+
+  function endRound() {
+    return roundAction(endRoundApi)
+  }
+
   /** Send the failed message again. */
   function retry(): Promise<boolean> {
     return send(pending.value?.content ?? '')
@@ -165,6 +198,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const conv = conversation.value
     if (!conv || conv.mode === mode) return
     const previous = conv.mode
+    pending.value = null
+    sendError.value = ''
     conversation.value = { ...conv, mode } // optimistic: the switch should feel instant
     try {
       conversation.value = await updateConversation(conv.id, { mode })
@@ -207,6 +242,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     startInquiry,
     send,
     retry,
+    helpRound,
+    endRound,
     setMode,
   }
 })

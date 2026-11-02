@@ -4,7 +4,6 @@ import type { Express } from 'express'
 import type { DB } from './db/client.js'
 import { createRepositories } from './db/repositories/index.js'
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js'
-import { chatRouter } from './routes/chat.js'
 import { createConversationsRouter } from './routes/conversations.js'
 import { healthRouter } from './routes/health.js'
 import { createSpacesRouter } from './routes/spaces.js'
@@ -23,7 +22,6 @@ export function createApp(db: DB, model: ChatModel | null = createModelFromEnv()
   app.use(express.json({ limit: '1mb' }))
 
   app.use('/api', healthRouter)
-  app.use('/api', chatRouter)
   app.use('/api', createSpacesRouter(repos))
   app.use('/api', createConversationsRouter(repos, model))
 

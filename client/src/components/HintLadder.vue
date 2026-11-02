@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * Three escalating hints: 方向 → 线索 → 直接告诉我这一步.
- * Levels unlock in order; a used level shows "· 已用" and is disabled.
+ * Any stronger level can be used at any time; used levels are disabled.
  */
 import { HINT_LABEL, type HintLevel } from '@/api/inquiry'
 
@@ -28,7 +28,7 @@ function label(level: HintLevel): string {
       type="button"
       class="hint"
       :class="{ used: level <= used }"
-      :disabled="level <= used || level > used + 1 || loading"
+      :disabled="level <= used || loading"
       @click="emit('request', level)"
     >
       {{ label(level) }}

@@ -25,19 +25,20 @@ function clip(text: string, max = 28): string {
 }
 
 const steps = computed<ReasoningStep[]>(() => {
-  if (!inquiry.goal) return []
+  if (!inquiry.round) return []
   const done: ReasoningStep[] = inquiry.yourAnswers.map((m) => ({
     key: m.id,
     title: clip(m.content, 18),
     note: '你自己说出来的',
     state: 'done',
   }))
-  const hints = inquiry.hints.length
+  if (!inquiry.activeRound) return done
+  const hints = inquiry.currentHints.length
   return [
     ...done,
     {
       key: 'current',
-      title: '这一层',
+      title: `第 ${inquiry.activeRound.depth} 层`,
       note: hints ? `正在想 · 用了 ${hints} 次提示` : '正在想',
       state: 'current',
     },

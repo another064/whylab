@@ -1,10 +1,7 @@
 <script setup lang="ts">
 /**
- * 追问模式（AI 问你）: goal → layered questions → you answer, with a 3-step hint ladder.
+ * 追问模式（AI 问你）: goal → layered questions → summary, all driven by the server.
  * The current AI question is the hero of the page (20px, typed out).
- *
- * Until socratic_rounds lands on the backend, depth is derived from the number of
- * AI questions in this mode, and hints / summary are mocked.
  */
 import { computed, ref } from 'vue'
 
@@ -13,10 +10,14 @@ import DepthBar from '@/components/DepthBar.vue'
 import HintLadder from '@/components/HintLadder.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import StateBlock from '@/components/StateBlock.vue'
-import FadeContent from '@/components/motion/FadeContent.vue'
 import TextType from '@/components/motion/TextType.vue'
-import { MAX_DEPTH, useInquiryStore } from '@/stores/inquiry'
+import { useInquiryStore } from '@/stores/inquiry'
 import { useWorkspaceStore } from '@/stores/workspace'
+
+import RoundTimeline from './RoundTimeline.vue'
+
+const VISIBLE_EARLIER = 3
+const HINT_TAG: Record<string, string> = { nudge: '方向', hint: '线索' }
 
 const workspace = useWorkspaceStore()
 const inquiry = useInquiryStore()
@@ -24,16 +25,16 @@ const inquiry = useInquiryStore()
 const goalDraft = ref('')
 const answer = ref('')
 
-const HINT_TAG: Record<HintLevel, string> = { 1: '方向', 2: '线索', 3: '这一步' }
-
-const current = computed(() => inquiry.probes.at(-1) ?? null)
-
-/** Earlier (question, your answer) pairs, oldest first. */
-const earlier = computed(() =>
-  inquiry.probes.slice(0, -1).map((probe, i) => ({ probe, answer: inquiry.yourAnswers[i] ?? null })),
+const collapsedEarlier = computed(() => inquiry.earlierMessages.slice(0, -VISIBLE_EARLIER))
+const visibleEarlier = computed(() => inquiry.earlierMessages.slice(-VISIBLE_EARLIER))
+const summary = computed(() => inquiry.round?.summary ?? null)
+/** Finished round: everything except the summary itself, for the "这一轮的过程" fold. */
+const finishedProcess = computed(() =>
+  inquiry.roundMessages.filter((m) => m.kind !== 'goal' && m.kind !== 'summary'),
 )
-const lastPair = computed(() => earlier.value.at(-1) ?? null)
-const olderPairs = computed(() => earlier.value.slice(0, -1))
+const summaryIsMock = computed(() => inquiry.roundMessages.at(-1)?.meta?.isMock ?? false)
+/** The very first message of a round is on its way (or failed). */
+const startingGoal = computed(() => (inquiry.activeRound ? null : workspace.pendingContent))
 
 function typingSpeed(text: string): number {
   return Math.max(10, Math.min(38, Math.round(3000 / Math.max(text.length, 1))))
@@ -46,79 +47,72 @@ async function startRound() {
 async function submit() {
   if (await workspace.send(answer.value)) answer.value = ''
 }
+
+function requestHelp(level: HintLevel) {
+  void workspace.helpRound(level)
+}
 </script>
 
 <template>
   <div class="socratic">
-    <!-- no goal yet: ask for one -->
-    <form v-if="!inquiry.goal" class="goal-form card" @submit.prevent="startRound">
-      <label for="goal" class="goal-label">这一轮想自己弄懂什么？</label>
-      <p class="secondary small">WhyLab 不直接给答案，会一层层问你，直到你自己推出来。</p>
-      <textarea
-        id="goal"
-        v-model="goalDraft"
-        class="textarea textarea-you"
-        rows="2"
-        placeholder="例如：自己推出为什么 Promise.then 总比 setTimeout(0) 先跑"
-        :disabled="workspace.sending"
-      />
-      <button class="btn btn-primary btn-lg" type="submit" :disabled="!goalDraft.trim() || workspace.sending">
-        {{ workspace.sending ? '正在准备第一个问题…' : '开始追问' }}
-      </button>
-    </form>
+    <details v-if="inquiry.otherSocraticMessages.length" class="fold">
+      <summary>更早的追问记录（{{ inquiry.otherSocraticMessages.length }} 条）</summary>
+      <RoundTimeline class="fold-body" :messages="inquiry.otherSocraticMessages" />
+    </details>
 
-    <template v-else>
+    <!-- active round -->
+    <template v-if="inquiry.activeRound">
       <div class="goal-bar card">
         <div class="goal-text">
           <span class="muted tiny">你的目标</span>
-          <span class="goal">{{ inquiry.goal }}</span>
+          <span class="goal">{{ inquiry.activeRound.goal }}</span>
         </div>
         <div class="goal-depth">
           <DepthBar
             class="goal-bar-track"
-            :value="inquiry.depth"
-            :max="MAX_DEPTH"
-            :label="`第 ${inquiry.depth} 层，共 ${MAX_DEPTH} 层`"
+            :value="inquiry.activeRound.depth"
+            :max="inquiry.activeRound.maxDepth"
+            :label="`第 ${inquiry.activeRound.depth} 层，共 ${inquiry.activeRound.maxDepth} 层`"
           />
-          <span class="secondary small nowrap">第 {{ inquiry.depth }} 层 / 最多 {{ MAX_DEPTH }} 层</span>
+          <span class="secondary small nowrap">
+            第 {{ inquiry.activeRound.depth }} 层 / 最多 {{ inquiry.activeRound.maxDepth }} 层
+          </span>
         </div>
       </div>
 
-      <details v-if="olderPairs.length" class="older">
-        <summary>前几层：你已经回答了 {{ olderPairs.length }} 个问题</summary>
-        <div class="older-list">
-          <template v-for="pair in olderPairs" :key="pair.probe.id">
-            <MessageBubble speaker="ai" variant="quiet" small>{{ pair.probe.content }}</MessageBubble>
-            <MessageBubble v-if="pair.answer" speaker="you" small>{{ pair.answer.content }}</MessageBubble>
-          </template>
-        </div>
+      <details v-if="collapsedEarlier.length" class="fold">
+        <summary>前面的 {{ collapsedEarlier.length }} 条</summary>
+        <RoundTimeline class="fold-body" :messages="collapsedEarlier" />
       </details>
+      <RoundTimeline v-if="visibleEarlier.length" :messages="visibleEarlier" />
 
-      <div v-if="lastPair" class="last-pair">
-        <MessageBubble speaker="ai" variant="quiet">{{ lastPair.probe.content }}</MessageBubble>
-        <MessageBubble v-if="lastPair.answer" speaker="you">{{ lastPair.answer.content }}</MessageBubble>
-      </div>
+      <section v-if="inquiry.currentProbe" class="current" aria-labelledby="current-label">
+        <p v-if="inquiry.currentProbe.meta?.assessment?.correctPoints.length" class="assess you">
+          说对了：{{ inquiry.currentProbe.meta.assessment.correctPoints.join(' ') }}
+        </p>
+        <p v-if="inquiry.currentProbe.meta?.assessment?.gaps.length" class="assess">
+          还差一点：{{ inquiry.currentProbe.meta.assessment.gaps.join(' ') }}
+        </p>
 
-      <section v-if="current" class="current" aria-labelledby="current-label">
         <div class="current-q">
           <span class="current-avatar" aria-hidden="true">W</span>
           <div class="current-text">
-            <span id="current-label" class="current-label">第 {{ inquiry.depth }} 层追问</span>
-            <span v-if="current.meta?.isMock" class="mock-flag">模拟响应 · 追问逻辑待接入</span>
+            <span id="current-label" class="current-label">第 {{ inquiry.activeRound.depth }} 层追问</span>
+            <span v-if="inquiry.currentProbe.meta?.isMock" class="mock-flag">模拟响应</span>
             <TextType
-              :key="current.id"
+              :key="inquiry.currentProbe.id"
               as="p"
               class="current-ask"
-              :text="current.content"
-              :typing-speed="typingSpeed(current.content)"
+              :text="inquiry.currentProbe.content"
+              :typing-speed="typingSpeed(inquiry.currentProbe.content)"
             />
           </div>
         </div>
 
-        <FadeContent v-for="h in inquiry.hints" :key="h.level" class="hint-box">
-          <span class="tag tag-neutral">{{ HINT_TAG[h.level] }}</span>
-          <span>{{ h.text }}</span>
-        </FadeContent>
+        <div v-for="h in inquiry.currentHints" :key="h.id" class="hint-box">
+          <span class="tag tag-neutral">{{ HINT_TAG[h.kind] }}</span>
+          <span>{{ h.content }}</span>
+        </div>
 
         <form class="answer-form" @submit.prevent="submit">
           <label for="myanswer" class="answer-label">你的想法</label>
@@ -127,32 +121,87 @@ async function submit() {
             v-model="answer"
             class="textarea textarea-you"
             rows="4"
+            maxlength="2000"
             placeholder="先自己推一推，写下半句也行"
             :disabled="workspace.sending"
           />
           <div class="answer-foot">
             <HintLadder
-              :used="inquiry.hints.length"
-              :loading="inquiry.hintLoading"
-              @request="inquiry.hint"
+              :used="inquiry.activeRound.hintLevel"
+              :loading="workspace.sending"
+              @request="requestHelp"
             />
             <button class="btn btn-primary btn-lg" type="submit" :disabled="!answer.trim() || workspace.sending">
-              {{ workspace.sending ? '正在想下一问…' : '我想好了' }}
+              {{ workspace.sending ? 'WhyLab 正在想…' : '我想好了' }}
             </button>
           </div>
         </form>
         <p class="muted tiny">看提示不扣分。WhyLab 只记下你在哪一步需要帮助，下次会在这里多陪你走一步。</p>
       </section>
 
-      <StateBlock v-else-if="workspace.sending" state="loading" title="WhyLab 正在想第一个问题" />
-
       <p v-if="workspace.sendError" class="error-text" role="alert">{{ workspace.sendError }}</p>
 
       <div class="wrap-up">
-        <button class="btn-link" type="button" disabled title="追问轮次接口完成后可用">
+        <button class="btn-link" type="button" :disabled="workspace.sending" @click="workspace.endRound()">
           今天先到这，帮我做个小结
         </button>
       </div>
+    </template>
+
+    <!-- first message on its way -->
+    <template v-else-if="startingGoal">
+      <MessageBubble speaker="you">{{ startingGoal }}</MessageBubble>
+      <MessageBubble v-if="workspace.sending" speaker="ai">
+        <StateBlock state="loading" :lines="2" title="WhyLab 正在想第一个问题" />
+      </MessageBubble>
+      <div v-else-if="workspace.sendError" class="send-failed" role="alert">
+        <span>{{ workspace.sendError }}你的目标还在。</span>
+        <button class="btn btn-outline" type="button" @click="workspace.retry()">重试</button>
+      </div>
+    </template>
+
+    <!-- no round running: the last summary, then ask for the next goal -->
+    <template v-else>
+      <section v-if="summary" class="summary card" aria-labelledby="summary-title">
+        <h2 id="summary-title" class="summary-title">这一轮的小结</h2>
+        <span v-if="summaryIsMock" class="mock-flag">模拟响应</span>
+        <p class="muted small">目标：{{ inquiry.round?.goal }}</p>
+        <p class="conclusion">{{ summary.conclusion }}</p>
+        <div v-if="summary.userInsights.length" class="summary-block">
+          <h3 class="block-title you">你自己讲对的</h3>
+          <ul class="plain-list">
+            <li v-for="item in summary.userInsights" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+        <div v-if="summary.stuckAt.length" class="summary-block">
+          <h3 class="block-title">卡住的地方</h3>
+          <ul class="plain-list">
+            <li v-for="item in summary.stuckAt" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+        <details v-if="finishedProcess.length" class="fold">
+          <summary>这一轮的过程</summary>
+          <RoundTimeline class="fold-body" :messages="finishedProcess" />
+        </details>
+      </section>
+
+      <form class="goal-form card" @submit.prevent="startRound">
+        <label for="goal" class="goal-label">{{ summary ? '下一轮想弄懂什么？' : '这一轮想自己弄懂什么？' }}</label>
+        <p class="secondary small">WhyLab 不直接给答案，会一层层问你，直到你自己推出来。</p>
+        <textarea
+          id="goal"
+          v-model="goalDraft"
+          class="textarea textarea-you"
+          rows="2"
+          maxlength="2000"
+          placeholder="例如：自己推出为什么 Promise.then 总比 setTimeout(0) 先跑"
+          :disabled="workspace.sending"
+        />
+        <button class="btn btn-primary btn-lg" type="submit" :disabled="!goalDraft.trim() || workspace.sending">
+          开始追问
+        </button>
+        <p v-if="workspace.sendError" class="error-text" role="alert">{{ workspace.sendError }}</p>
+      </form>
     </template>
   </div>
 </template>
@@ -176,19 +225,66 @@ async function submit() {
   white-space: nowrap;
 }
 
-.goal-form {
+.fold summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.fold-body {
+  padding-top: var(--space-2);
+}
+
+.goal-form,
+.summary {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.goal-form .btn {
+.goal-form .btn,
+.summary .mock-flag {
   align-self: flex-start;
 }
 
 .goal-label {
   font-size: var(--fs-h2);
   font-weight: 700;
+}
+
+.summary-title {
+  font-size: var(--fs-h2);
+}
+
+.conclusion {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 500;
+}
+
+.summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.block-title {
+  font-size: var(--fs-sm);
+}
+
+.block-title.you {
+  color: var(--you-text);
+}
+
+.plain-list {
+  padding-left: 1.2em;
+  list-style: disc;
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  color: var(--text-body);
 }
 
 .goal-bar {
@@ -223,26 +319,6 @@ async function submit() {
   width: 132px;
 }
 
-.older summary {
-  cursor: pointer;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-}
-
-.older-list,
-.last-pair {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.older-list {
-  padding-top: var(--space-2);
-}
-
 .current {
   background: var(--surface);
   border: 1.5px solid var(--ai);
@@ -252,6 +328,17 @@ async function submit() {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.assess {
+  margin-bottom: calc(var(--space-2) * -1);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.assess.you {
+  color: var(--you-text);
 }
 
 .current-q {
@@ -335,6 +422,21 @@ async function submit() {
   justify-content: center;
 }
 
+.send-failed {
+  margin-left: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
 @media (max-width: 767px) {
   .current {
     padding: var(--space-4);
@@ -342,6 +444,10 @@ async function submit() {
 
   .answer-foot .btn-lg {
     width: 100%;
+  }
+
+  .send-failed {
+    margin-left: 0;
   }
 }
 </style>

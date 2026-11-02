@@ -9,7 +9,7 @@ import type { ConversationMode } from '@/api/workspace'
 import AppIcon from '@/components/AppIcon.vue'
 import ModeSwitch from '@/components/ModeSwitch.vue'
 import StateBlock from '@/components/StateBlock.vue'
-import { MAX_DEPTH, useInquiryStore } from '@/stores/inquiry'
+import { useInquiryStore } from '@/stores/inquiry'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 import ExplainThread from './ExplainThread.vue'
@@ -38,7 +38,9 @@ const mode = computed<ConversationMode>({
 
 const phoneSubtitle = computed(() =>
   mode.value === 'socratic'
-    ? `你来问我 · 第 ${Math.max(inquiry.depth, 1)} / ${MAX_DEPTH} 层`
+    ? inquiry.activeRound
+      ? `你来问我 · 第 ${inquiry.activeRound.depth} / ${inquiry.activeRound.maxDepth} 层`
+      : `你来问我 · ${spaceTitle.value}`
     : `我来问 · ${spaceTitle.value}`,
 )
 </script>

@@ -82,6 +82,35 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleOptions): C
   }
 }
 
+const MAX_REPAIR_RETRIES = 2
+
+/**
+ * 调模型并校验：parse 抛 ModelOutputError 时带修复提示重试，
+ * 最多重试 2 次，仍不合格返回 AI_INVALID_OUTPUT，绝不把半成品交给调用方。
+ */
+export async function completeValidated<T>(
+  model: ChatModel,
+  messages: ChatMessage[],
+  parse: (raw: string) => T,
+  repairHint: string,
+): Promise<T> {
+  const conversation = [...messages]
+  for (let attempt = 0; attempt <= MAX_REPAIR_RETRIES; attempt += 1) {
+    let raw: string | null = null
+    try {
+      raw = await model.completeJson(conversation)
+      return parse(raw)
+    } catch (error) {
+      if (!(error instanceof ModelOutputError)) throw error
+      console.warn(`[whylab] invalid model output (attempt ${attempt + 1}): ${error.message}`)
+      if (raw) {
+        conversation.push({ role: 'assistant', content: raw }, { role: 'user', content: repairHint })
+      }
+    }
+  }
+  throw aiInvalidOutput()
+}
+
 /** 未配置时返回 null，调用方走 mock 并标记 isMock。 */
 export function createModelFromEnv(): ChatModel | null {
   if (!isAiConfigured()) return null

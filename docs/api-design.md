@@ -1,7 +1,7 @@
 # WhyLab API 设计与数据模型（MVP）
 
 - 版本：V0.3（采用界面设计稿，补充其所需接口与字段）
-- 状态：健康检查、提问、学习空间、对话与消息（解释模式接真实模型）已实现（标 ✅）；其余为设计草案。前端对未实现接口的调用集中在 `client/src/api/*.ts`，当前返回模拟数据
+- 状态：健康检查、学习空间、对话与消息（解释、追问两种模式都接真实模型）已实现（标 ✅）；其余为设计草案。前端对未实现接口的调用集中在 `client/src/api/*.ts`，当前返回模拟数据
 - 约定：所有接口以 `/api` 为前缀，请求与响应均为 `application/json; charset=utf-8`
 
 > 设计意图：**先把对话、知识节点、复习任务与复习历史的关系定下来，再写页面。**
@@ -59,34 +59,6 @@
 
 用途：验证 Express 已启动、路由可达；前端首页状态区据此显示"已连接 / 未连接"。
 
-### 2.2 提问（当前为模拟响应）
-
-`POST /api/chat`
-
-请求：
-
-```json
-{ "question": "为什么闭包能访问外部函数的变量？" }
-```
-
-响应：
-
-```json
-{
-  "success": true,
-  "data": {
-    "question": "为什么闭包能访问外部函数的变量？",
-    "answer": "……",
-    "isMock": true,
-    "followUpSuggestions": ["这个结论依赖哪些前提？……"]
-  }
-}
-```
-
-- `question`：字符串，trim 后非空，长度 ≤ 2000。
-- `isMock`：**契约的一部分**。只要后端没有真正调用模型，就必须为 `true`，前端据此显示"模拟响应"标记，避免把占位文本当成 AI 解释。
-- 该接口的返回结构在接入真实模型后保持不变，仅 `answer` 与 `isMock` 的取值变化。
-
 ---
 
 ## 3. 业务接口（按实现顺序；✅ = 已实现并有测试）
@@ -111,12 +83,11 @@
 | `PATCH` | `/api/conversations/:id` | ✅ 改标题或切换模式 `{ title?, mode?: 'explain' \| 'socratic' }` |
 | `DELETE` | `/api/conversations/:id` | ✅ 删除对话及其消息、追问轮次 |
 | `GET` | `/api/conversations/:id/messages` | ✅ 消息列表（`?limit=`，默认且最多 200 条，按发送顺序），每条带 `mode`、`kind`、`meta` |
-| `POST` | `/api/conversations/:id/messages` | ✅ 发送一条消息，按对话当前 `mode` 生成回复（解释模式走真实模型，未配置时 mock；追问模式暂为 mock） |
+| `POST` | `/api/conversations/:id/messages` | ✅ 发送一条消息，按对话当前 `mode` 生成回复（未配置模型时走 mock，并标记 `isMock`） |
 | `POST` | `/api/conversations/:id/restatements` | 解释后"用一句话复述" `{ content }`：写一条 `kind = restatement` 的消息，同时建 `understanding` 节点（`source_message_id` 指向这条消息），并作为档案证据 |
-| `POST` | `/api/conversations/:id/hints` | 追问模式的三级提示 `{ level: 1 \| 2 \| 3 }`，分别对应 `nudge` / `hint` / `reveal`；只能按顺序解锁，记录"在哪一步需要帮助"，不影响评分 |
 | `GET` | `/api/conversations/:id/dependencies` | 这个问题依赖的概念：`[{ title, nodeId?, state: 'mastered' \| 'learned' \| 'missing' }]`，`mastered` 来自档案里已确认的 `mastered` 条目 |
-| `POST` | `/api/conversations/:id/reveal` | 追问模式下"直接告诉我"：当前步强制 `reveal`（等价于 `hints` 的 `level: 3`，二选一实现） |
-| `POST` | `/api/conversations/:id/end` | 结束会话：结束进行中的追问轮次并触发档案提取（异步） |
+| `POST` | `/api/conversations/:id/reveal` | ✅ 追问模式要帮助 `{ level?: 1 \| 2 \| 3 }`：1 方向、2 线索、3（默认）直接告诉我 |
+| `POST` | `/api/conversations/:id/end` | ✅ 结束进行中的轮次并生成小结（档案提取待思维档案完成后接入） |
 
 **解释模式**的实现约定：
 
@@ -125,7 +96,6 @@
 - 上下文取最近 10 条消息，并去掉 `isMock` 的占位回复。
 - `observations` 只保留枚举合法、不含能力评价词、`excerpt` 真实出现在提问里的条目，其余丢弃，不触发重试。
 - 输出不合格时最多修复重试 2 次，仍失败返回 `AI_INVALID_OUTPUT`；服务不可用或超时（`AI_TIMEOUT_MS`，默认 60 秒）返回 `AI_UNAVAILABLE`，不自动重试。
-- `/api/chat` 是早期占位接口，始终 `isMock: true`，前端已不再使用。
 
 **解释模式**下 `POST .../messages` 的响应：
 
@@ -167,6 +137,17 @@
 
 - `kind = summary` 时 `round.status = completed`，并附 `summary: { userInsights[], stuckAt[], conclusion }`，前端提供"保存为知识节点"。
 - `assessment` 只用于界面展示与证据记录，不计分。
+
+**追问模式的实现约定**（状态机 `services/socratic-round.ts`，编排 `services/socratic.ts`）：
+
+- 诊断问题算第 1 层。每次作答进入下一层；第 `maxDepth`（默认 6）层答完直接小结，不再问模型下一问。
+- 提示不增加层数，只能往更强的级别走，可以跳级，同一级不能重复要（400）。进入下一层时 `hintLevel` 清零。
+- `reveal`（level 3）一次写两条回复：讲解 + 下一层追问；若目标已达成或已是最后一层，则是讲解 + 小结。响应里用 `replies[]`，`reply` 是最后一条。
+- 每次要提示都在回复的 `meta.stuck: { depth, level, question }` 记一条卡点证据，供思维档案使用。
+- `kind = probe` 服务端检查（`checkProbe`）：以问号结尾、不超过 200 字、铺垫不超过一句、不含"答案是 X""原因在于 X"这类直接给答案的句式；不合格带修复提示重试，最多 2 次，仍不合格返回 `AI_INVALID_OUTPUT`。这是启发式检查，拦不住所有变相泄底，主要靠提示词约束。
+- 先调用模型，成功后才在同一事务写库；写库前确认轮次没有变化，否则返回 `ROUND_NOT_ACTIVE`。
+- 没有进行中的轮次时，`reveal` 和 `end` 返回 `ROUND_NOT_ACTIVE`（409）；对话当前是解释模式时同样如此。
+- 模型上下文只含当前这一轮的消息，占位回复不算。`GET`/`PATCH /api/conversations/:id` 返回 `round`（最近一轮，无论是否结束），页面据此恢复进度。
 
 上下文策略：取该对话最近 N 条消息（默认 10，可配）+ 进行中轮次的目标与层数 + 相关的已确认思维模式（≤ 5 条）。超出部分后续用摘要压缩，MVP 不做。
 
@@ -532,7 +513,7 @@ function selectForPrompt(patterns: Pattern[], topic: string, limit = 5): Pattern
 
 1. ✅ **SQLite 接入**（迁移 001、002 已落地）：`server/src/db/` 下建连接与迁移脚本（`better-sqlite3`），先落 `users / learning_spaces / conversations / messages / socratic_rounds`，字段按本版一次到位（`mode`、`kind`、`meta_json`），避免后续迁移。启动时自动创建单用户 `local` 记录。
 2. ✅ **真实对话 · 解释模式**：`POST /api/conversations/:id/messages` 接 OpenAI 兼容接口，保留 `isMock` 语义（无 key 时仍走 mock）；输出带 `observations`，先写入 `meta_json` 不使用。
-3. **追问模式**：同一接口按 `mode` 分派到 `services/socratic.ts`；轮次状态机（goal → probe… → summary）写单元测试；`reveal` 与 `end` 接口。
+3. ✅ **追问模式**：同一接口按 `mode` 分派到 `services/socratic.ts`；轮次状态机（goal → probe… → summary）写单元测试；`reveal` 与 `end` 接口。
 4. **知识节点**：保存 → 列表 → 编辑 → 删除，含 `knowledge_edges` 与"追问小结保存为节点"。
 5. **复习**：调度纯函数 + 单元测试 → `review_items` / `review_attempts`（含结构化反馈字段）→ 回忆界面。
 6. **思维档案**：`mergeObservations / decay / selectForPrompt` 纯函数 + 单测 → 提取任务 → `/api/profile` 接口 → 档案页 → 注入三处提示词。

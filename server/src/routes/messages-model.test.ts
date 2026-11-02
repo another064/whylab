@@ -114,11 +114,4 @@ describe('解释模式接真实模型', () => {
     expect((await send(id, '  ')).status).toBe(400)
     expect(completeJson).not.toHaveBeenCalled()
   })
-
-  it('追问模式还不调用模型，并如实标记为模拟', async () => {
-    const id = await conversation('socratic')
-    const res = await send(id)
-    expect(res.body.data.isMock).toBe(true)
-    expect(completeJson).not.toHaveBeenCalled()
-  })
 })

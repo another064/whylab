@@ -1,23 +1,13 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 
-import {
-  fetchDependencies,
-  requestHint,
-  saveRestatement,
-  type Dependency,
-  type HintLevel,
-} from '@/api/inquiry'
+import { fetchDependencies, saveRestatement, type Dependency } from '@/api/inquiry'
 import type { Message } from '@/api/workspace'
 import { errorMessage, useWorkspaceStore } from '@/stores/workspace'
 
-/** Socratic depth cap, mirrors socratic_rounds.max_depth default. */
-export const MAX_DEPTH = 6
-
 /**
- * Per-conversation state shared by InquiryView and InquiryAside:
- * restatement, hints used in the current step, dependencies.
- * Reset whenever the open conversation changes.
+ * Per-conversation state shared by InquiryView and InquiryAside.
+ * The socratic round itself lives on the server; everything about it here is derived.
  */
 export const useInquiryStore = defineStore('inquiry', () => {
   const workspace = useWorkspaceStore()
@@ -25,9 +15,6 @@ export const useInquiryStore = defineStore('inquiry', () => {
   const restatement = ref<string | null>(null)
   const restating = ref(false)
   const restateError = ref('')
-
-  const hints = ref<{ level: HintLevel; text: string }[]>([])
-  const hintLoading = ref(false)
 
   const dependencies = ref<Dependency[] | null>(null)
   const recallQueued = ref(false)
@@ -37,32 +24,43 @@ export const useInquiryStore = defineStore('inquiry', () => {
   watch(conversationId, (id) => {
     restatement.value = null
     restateError.value = ''
-    hints.value = []
     dependencies.value = null
     recallQueued.value = false
     if (id) void fetchDependencies(id).then((d) => (dependencies.value = d))
   }, { immediate: true })
 
-  // a new AI question starts a new step: the hint ladder resets
-  watch(
-    () => workspace.messages.length,
-    () => (hints.value = []),
-  )
-
   const explainMessages = computed(() => workspace.messages.filter((m) => m.mode === 'explain'))
-  const socraticMessages = computed(() => workspace.messages.filter((m) => m.mode === 'socratic'))
 
   const latestAnswer = computed<Message | null>(
     () => [...explainMessages.value].reverse().find((m) => m.role === 'assistant') ?? null,
   )
 
-  /** Socratic: the goal is the first thing you said in this mode. */
-  const goal = computed(() => socraticMessages.value.find((m) => m.role === 'user')?.content ?? null)
-  const probes = computed(() => socraticMessages.value.filter((m) => m.role === 'assistant'))
-  const depth = computed(() => Math.min(probes.value.length, MAX_DEPTH))
-  const yourAnswers = computed(() =>
-    socraticMessages.value.filter((m) => m.role === 'user').slice(1),
+  /** The latest round, active or finished. */
+  const round = computed(() => workspace.conversation?.round ?? null)
+  const activeRound = computed(() => (round.value?.status === 'active' ? round.value : null))
+
+  const roundMessages = computed(() =>
+    round.value ? workspace.messages.filter((m) => m.roundId === round.value?.id) : [],
   )
+  /** Earlier rounds and old messages without a round. */
+  const otherSocraticMessages = computed(() =>
+    workspace.messages.filter((m) => m.mode === 'socratic' && m.roundId !== round.value?.id),
+  )
+
+  const currentProbeIndex = computed(() =>
+    roundMessages.value.map((m) => m.kind).lastIndexOf('probe'),
+  )
+  /** The question waiting for an answer. */
+  const currentProbe = computed(() => roundMessages.value[currentProbeIndex.value] ?? null)
+  /** Hints asked for on the current question. */
+  const currentHints = computed(() =>
+    roundMessages.value.slice(currentProbeIndex.value + 1).filter((m) => m.kind === 'nudge' || m.kind === 'hint'),
+  )
+  /** Everything before the current question, without the goal (it has its own bar). */
+  const earlierMessages = computed(() =>
+    roundMessages.value.slice(0, Math.max(currentProbeIndex.value, 0)).filter((m) => m.kind !== 'goal'),
+  )
+  const yourAnswers = computed(() => roundMessages.value.filter((m) => m.kind === 'response'))
 
   async function restate(text: string): Promise<void> {
     const id = conversationId.value
@@ -78,33 +76,22 @@ export const useInquiryStore = defineStore('inquiry', () => {
     }
   }
 
-  async function hint(level: HintLevel): Promise<void> {
-    const id = conversationId.value
-    if (!id) return
-    hintLoading.value = true
-    try {
-      hints.value = [...hints.value, { level, text: await requestHint(id, level) }]
-    } finally {
-      hintLoading.value = false
-    }
-  }
-
   return {
     restatement,
     restating,
     restateError,
-    hints,
-    hintLoading,
     dependencies,
     recallQueued,
     explainMessages,
-    socraticMessages,
     latestAnswer,
-    goal,
-    probes,
-    depth,
+    round,
+    activeRound,
+    roundMessages,
+    otherSocraticMessages,
+    currentProbe,
+    currentHints,
+    earlierMessages,
     yourAnswers,
     restate,
-    hint,
   }
 })

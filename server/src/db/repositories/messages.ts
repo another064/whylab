@@ -27,6 +27,12 @@ export interface MessageMeta {
     premises: string[]
     uncertainties: string[]
   }
+  /** 追问模式：对上一条作答的评估，只用于展示和留证，不计分 */
+  assessment?: { correctPoints: string[]; gaps: string[] }
+  /** 追问模式：本轮小结 */
+  summary?: { userInsights: string[]; stuckAt: string[]; conclusion: string }
+  /** 卡点证据：学习者在哪一层、哪个问题上要了哪一级提示，供思维档案使用 */
+  stuck?: { depth: number; level: number; question: string }
   /** 给思维档案攒的原料，当前只存不用 */
   observations?: { category: string; statement: string; excerpt: string }[]
 }

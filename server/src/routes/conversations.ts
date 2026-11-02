@@ -2,7 +2,7 @@ import { Router } from 'express'
 
 import type { Repositories } from '../db/repositories/index.js'
 import { isConversationMode, type ConversationMode } from '../db/repositories/conversations.js'
-import type { MessageKind, MessageMeta } from '../db/repositories/messages.js'
+import type { MessageMeta } from '../db/repositories/messages.js'
 import { LOCAL_USER_ID } from '../db/migrate.js'
 import { HttpError, notFound, validationError } from '../http/errors.js'
 import { readBody, readString } from '../http/validate.js'
@@ -10,21 +10,23 @@ import { CONVERSATION_TITLE_MAX } from './spaces.js'
 import type { ChatModel } from '../services/ai/model.js'
 import { explanationToText, generateExplanation } from '../services/explain.js'
 import { buildMockAnswer, MOCK_FOLLOW_UPS } from '../services/mock-reply.js'
+import { createSocraticService } from '../services/socratic.js'
+import type { Round } from '../db/repositories/rounds.js'
+import { HINT_LEVEL, type HintLevel } from '../services/socratic-round.js'
 
 export const MESSAGE_CONTENT_MAX = 2000
 const MESSAGE_LIST_MAX = 200
 
-/**
- * 解释模式配置了模型就走真实服务；追问模式还是 mock，
- * 轮次（socratic_rounds）和提示词在第 3 步接入，这里暂不创建。
- */
-const KINDS_BY_MODE: Record<'explain' | 'socratic', { user: MessageKind; reply: MessageKind }> = {
-  explain: { user: 'question', reply: 'answer' },
-  socratic: { user: 'goal', reply: 'probe' },
+/** 返回给前端的轮次：状态机字段 + 目标 + 小结。 */
+function toRoundView(round: Round | null) {
+  if (!round) return null
+  const { id, goal, depth, maxDepth, hintLevel, status, summary, startedAt, endedAt } = round
+  return { id, goal, depth, maxDepth, hintLevel, status, summary, startedAt, endedAt }
 }
 
 export function createConversationsRouter(repos: Repositories, model: ChatModel | null): Router {
   const router = Router()
+  const socratic = createSocraticService(repos, model)
 
   function requireConversation(id: string) {
     const conversation = repos.conversations.findById(id)
@@ -35,8 +37,27 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
     return conversation
   }
 
+  function withRound(id: string) {
+    const conversation = requireConversation(id)
+    return { ...conversation, round: toRoundView(repos.rounds.findLatest(id)) }
+  }
+
+  function socraticResponse(result: Awaited<ReturnType<typeof socratic.respond>>) {
+    return {
+      success: true,
+      data: {
+        ...(result.userMessage ? { userMessage: result.userMessage } : {}),
+        reply: result.replies.at(-1),
+        replies: result.replies,
+        round: toRoundView(result.round),
+        assessment: result.assessment,
+        isMock: result.isMock,
+      },
+    }
+  }
+
   router.get('/conversations/:id', (req, res) => {
-    res.json({ success: true, data: requireConversation(req.params.id) })
+    res.json({ success: true, data: withRound(req.params.id) })
   })
 
   router.patch('/conversations/:id', (req, res) => {
@@ -46,11 +67,11 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
     if (body.mode !== undefined && !isConversationMode(body.mode)) {
       throw validationError("mode 只能是 'explain' 或 'socratic'。")
     }
-    const updated = repos.conversations.update(req.params.id, {
+    repos.conversations.update(req.params.id, {
       title: title ?? undefined,
       mode: body.mode as ConversationMode | undefined,
     })
-    res.json({ success: true, data: updated })
+    res.json({ success: true, data: withRound(req.params.id) })
   })
 
   router.delete('/conversations/:id', (req, res) => {
@@ -69,7 +90,6 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
   router.post('/conversations/:id/messages', async (req, res) => {
     const conversation = requireConversation(req.params.id)
     const body = readBody(req.body)
-    // 与 /api/chat 保持同样的错误码，前端提示逻辑可复用。
     const content = typeof body.content === 'string' ? body.content.trim() : ''
     if (!content) {
       throw new HttpError(400, 'INVALID_QUESTION', '问题不能为空，请先输入想弄明白的内容。')
@@ -82,12 +102,15 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
       )
     }
 
-    const kinds = KINDS_BY_MODE[conversation.mode]
+    if (conversation.mode === 'socratic') {
+      res.status(201).json(socraticResponse(await socratic.respond(conversation, content)))
+      return
+    }
 
     // 先拿到回复再落库：模型失败时什么都不写，用户重试不会留下重复的问题。
     let replyContent: string
     let replyMeta: MessageMeta
-    if (conversation.mode === 'explain' && model) {
+    if (model) {
       const history = repos.messages.listByConversation(conversation.id, MESSAGE_LIST_MAX)
       const explanation = await generateExplanation(model, history, content)
       replyContent = explanationToText(explanation)
@@ -115,7 +138,7 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
         conversationId: conversation.id,
         role: 'user',
         mode: conversation.mode,
-        kind: kinds.user,
+        kind: 'question',
         content,
         createdAt: now,
       })
@@ -123,7 +146,7 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
         conversationId: conversation.id,
         role: 'assistant',
         mode: conversation.mode,
-        kind: kinds.reply,
+        kind: 'answer',
         content: replyContent,
         meta: replyMeta,
         createdAt: now,
@@ -141,6 +164,20 @@ export function createConversationsRouter(repos: Repositories, model: ChatModel 
         isMock: replyMeta.isMock ?? false,
       },
     })
+  })
+
+  router.post('/conversations/:id/reveal', async (req, res) => {
+    const conversation = requireConversation(req.params.id)
+    const { level = HINT_LEVEL.reveal } = readBody(req.body)
+    if (level !== HINT_LEVEL.nudge && level !== HINT_LEVEL.hint && level !== HINT_LEVEL.reveal) {
+      throw validationError('level 只能是 1（方向）、2（线索）或 3（直接告诉我）。')
+    }
+    res.status(201).json(socraticResponse(await socratic.help(conversation, level as HintLevel)))
+  })
+
+  router.post('/conversations/:id/end', async (req, res) => {
+    const conversation = requireConversation(req.params.id)
+    res.status(201).json(socraticResponse(await socratic.end(conversation)))
   })
 
   return router

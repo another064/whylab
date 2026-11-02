@@ -10,11 +10,31 @@ export interface LearningSpace {
   updatedAt: string
 }
 
+export interface RoundSummary {
+  userInsights: string[]
+  stuckAt: string[]
+  conclusion: string
+}
+
+/** A socratic round: goal → layered questions → summary. */
+export interface Round {
+  id: string
+  goal: string
+  depth: number
+  maxDepth: number
+  /** strongest hint used on the current question: 0 none, 1 方向, 2 线索, 3 讲解 */
+  hintLevel: number
+  status: 'active' | 'completed' | 'abandoned'
+  summary: RoundSummary | null
+}
+
 export interface Conversation {
   id: string
   spaceId: string
   title: string
   mode: ConversationMode
+  /** Latest round; only present on detail responses. */
+  round?: Round | null
   createdAt: string
   updatedAt: string
 }
@@ -25,6 +45,7 @@ export interface Message {
   role: 'user' | 'assistant'
   mode: ConversationMode
   kind: string
+  roundId: string | null
   content: string
   meta: {
     followUpSuggestions?: string[]
@@ -36,14 +57,19 @@ export interface Message {
       premises: string[]
       uncertainties: string[]
     }
+    assessment?: { correctPoints: string[]; gaps: string[] }
+    summary?: RoundSummary
   } | null
   createdAt: string
 }
 
 export interface SendMessageResult {
-  userMessage: Message
+  userMessage?: Message
   reply: Message
-  followUpSuggestions: string[]
+  /** Socratic turns can return more than one reply (explanation + next question). */
+  replies?: Message[]
+  round?: Round
+  followUpSuggestions?: string[]
   /** 后端未调用真实模型时为 true，界面必须据此展示「模拟响应」标记。 */
   isMock: boolean
 }
@@ -97,4 +123,20 @@ export function sendMessage(conversationId: string, content: string): Promise<Se
     `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
     { method: 'POST', body: JSON.stringify({ content }) },
   )
+}
+
+/** POST /api/conversations/:id/reveal —— level 1 方向、2 线索、3 直接告诉我。 */
+export function revealStep(conversationId: string, level: 1 | 2 | 3): Promise<SendMessageResult> {
+  return request<SendMessageResult>(`/api/conversations/${encodeURIComponent(conversationId)}/reveal`, {
+    method: 'POST',
+    body: JSON.stringify({ level }),
+  })
+}
+
+/** POST /api/conversations/:id/end —— 结束这一轮并生成小结。 */
+export function endRound(conversationId: string): Promise<SendMessageResult> {
+  return request<SendMessageResult>(`/api/conversations/${encodeURIComponent(conversationId)}/end`, {
+    method: 'POST',
+    body: '{}',
+  })
 }
